@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import mysql from 'mysql2/promise';
 import { generateToken, verifyToken } from './jwt.js';
 import sitesRouter from './sites.js';
