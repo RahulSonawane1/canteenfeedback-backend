@@ -145,41 +145,80 @@ app.post('/login', async (req, res) => {
 	}
 });
 
+// Store connected SSE clients
+const sseClients = new Set();
+
+// SSE endpoint for real-time feedback updates
+app.get('/feedback-updates', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+
+  // Send an initial message
+  res.write('data: connected\n\n');
+
+  // Keep the connection alive with a periodic heartbeat
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) return;
+    res.write('data: heartbeat\n\n');
+  }, 30000);
+
+  const client = res;
+  sseClients.add(client);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(client);
+  });
+});
+
+// Function to notify all connected clients
+const notifyClients = () => {
+  sseClients.forEach(client => {
+    client.write('data: update\n\n');
+  });
+};
+
 // --- Feedback Endpoints ---
 
 // Accepts responses array and calculates overall rating
 app.post('/feedback', async (req, res) => {
-	const { site, canteen, responses, userId, username } = req.body;
-	if (!site || !canteen || !Array.isArray(responses) || responses.length === 0) {
-		return res.status(400).json({ error: 'Missing feedback data' });
-	}
-	// Calculate overall rating (average of all question ratings)
-	const overallRating = Math.round(
-		responses.reduce((sum, r) => sum + (r.rating || 0), 0) / responses.length * 100
-	) / 100;
-	try {
-		const conn = await getConnection();
-		let [canteenRows] = await conn.execute('SELECT id FROM canteens WHERE site = ? AND name = ?', [site, canteen]);
-		let canteenId;
-		if (canteenRows.length === 0) {
-			const [result] = await conn.execute('INSERT INTO canteens (site, name) VALUES (?, ?)', [site, canteen]);
-			canteenId = result.insertId;
-		} else {
-			canteenId = canteenRows[0].id;
-		}
-		// Save feedback with responses as JSON
-		await conn.execute(
-			'INSERT INTO feedback (user_id, site, canteen_id, rating, username, responses, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
-			[userId || null, site, canteenId, overallRating, username || null, JSON.stringify(responses), Date.now()]
-		);
-		await conn.end();
-		return res.json({ success: true });
-	} catch (err) {
-		return res.status(500).json({ error: 'Server error', details: err.message });
-	}
-});
-
-// --- Admin Feedback Management ---
+  const { site, canteen, responses, userId, username } = req.body;
+  if (!site || !canteen || !Array.isArray(responses) || responses.length === 0) {
+    return res.status(400).json({ error: 'Missing feedback data' });
+  }
+  // Calculate overall rating (average of all question ratings)
+  const overallRating = Math.round(
+    responses.reduce((sum, r) => sum + (r.rating || 0), 0) / responses.length * 100
+  ) / 100;
+  try {
+    const conn = await getConnection();
+    let [canteenRows] = await conn.execute('SELECT id FROM canteens WHERE site = ? AND name = ?', [site, canteen]);
+    let canteenId;
+    if (canteenRows.length === 0) {
+      const [result] = await conn.execute('INSERT INTO canteens (site, name) VALUES (?, ?)', [site, canteen]);
+      canteenId = result.insertId;
+    } else {
+      canteenId = canteenRows[0].id;
+    }
+    // Save feedback with responses as JSON
+    await conn.execute(
+      'INSERT INTO feedback (user_id, site, canteen_id, rating, username, responses, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [userId || null, site, canteenId, overallRating, username || null, JSON.stringify(responses), Date.now()]
+    );
+    await conn.end();
+    
+    // Notify all connected clients about the new feedback
+    notifyClients();
+    
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});// --- Admin Feedback Management ---
 app.get('/admin/feedback', async (req, res) => {
 	try {
 		const conn = await getConnection();
